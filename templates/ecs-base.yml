@@ -1,0 +1,227 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  AppId:
+    Description: An application ID that is prefixed to resource names
+    Type: String
+
+  EnvId:
+    Description: An environment ID that is prefixed to resource names
+    Type: String
+
+  VpcId:
+    Type: String
+
+  PublicSubnetId1:
+    Type: String
+
+  PublicSubnetId2:
+    Type: String
+
+Resources:
+  #----------------------------------------------------------#
+  # Security Group
+  #----------------------------------------------------------#
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for ALB"
+      GroupName: !Sub "${AppId}-${EnvId}-commmon-alb-sg"
+      VpcId: !Sub "${VpcId}"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "106.173.86.150/32" # 単一のCIDRを指定
+
+  WebAppEcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for WebApp Layer ECS"
+      GroupName: !Sub "${AppId}-${EnvId}-webapp-ecs-sg"
+      VpcId: !Sub "${VpcId}"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !GetAtt AlbSecurityGroup.GroupId
+  #----------------------------------------------------------#
+
+  #----------------------------------------------------------#
+  # IAM Role
+  #----------------------------------------------------------#
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppId}-${EnvId}-ecs-task-execution-role"
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  EcsTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppId}-${EnvId}-ecs-task-role"
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: !Sub "${AppId}-${EnvId}-ecs-task-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                Resource: "*"
+  #----------------------------------------------------------#
+
+  #----------------------------------------------------------#
+  # ECR Repository
+  #----------------------------------------------------------#
+  WebAppEcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${AppId}-${EnvId}-webapp"
+  #----------------------------------------------------------#
+
+  #----------------------------------------------------------#
+  # ECS
+  #----------------------------------------------------------#
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${AppId}-${EnvId}-ecs-cluster"
+      Configuration:
+        ExecuteCommandConfiguration:
+          Logging: DEFAULT
+          
+  EcsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/ecs/${AppId}/${EnvId}"
+  #----------------------------------------------------------#
+
+
+  #----------------------------------------------------------#
+  # ALB
+  #----------------------------------------------------------#
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AppId}-${EnvId}"
+      Scheme: internet-facing
+      Subnets:
+        - !Sub "${PublicSubnetId1}"
+        - !Sub "${PublicSubnetId2}"
+      SecurityGroups:
+        - !GetAtt AlbSecurityGroup.GroupId
+
+  AlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        # - Type: authenticate-cognito
+        #   AuthenticateCognitoConfig:
+        #     UserPoolArn: "arn:aws:cognito-idp:ap-northeast-1:819092134269:userpool/ap-northeast-1_j70afZv8Y"
+        #     UserPoolClientId: "744jq1b7njpob1avm1ia5pdj6"
+        #     UserPoolDomain: "ap-northeast-1j70afzv8y.auth.ap-northeast-1.amazoncognito.com"
+        #     OnUnauthenticatedRequest: deny
+        #   Order: 1
+        - Type: forward
+          TargetGroupArn: !Ref WebAppAlbTargetGroup
+          Order: 1
+      LoadBalancerArn: !Ref Alb
+      Port: 80
+      Protocol: HTTP
+
+  WebAppAlbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Sub "${VpcId}"
+      Name: !Sub "${AppId}-${EnvId}-webapp-alb-tg"
+      Protocol: HTTP
+      Port: 8080
+      TargetType: ip
+      HealthCheckPath: /demo/
+      HealthCheckPort: 8080
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+  #----------------------------------------------------------#
+
+Outputs:
+  WebAppEcsSecurityGroupId:
+    Description: A reference to the ID of webapp ECS security group
+    Value: !Ref WebAppEcsSecurityGroup
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-webapp-ecs-sg-id"
+
+  WebAppEcrRepositoryUri:
+    Description: A reference to the URI of webapp ECR repository
+    Value: !GetAtt WebAppEcrRepository.RepositoryUri
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-webapp-ecr-repository-uri"
+
+  EcsClusterId:
+    Description: A reference to the ID of common ECS cluster
+    Value: !Ref EcsCluster
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-ecs-cluster-id"
+
+  EcsLogGroupName:
+    Description: A reference to the Name of common ECS log group
+    Value: !Ref EcsLogGroup
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-ecs-log-group-name"
+
+  EcsTaskExecutionRoleArn:
+    Description: A reference to the ARN of common ECS task execution role
+    Value: !GetAtt EcsTaskExecutionRole.Arn
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-ecs-task-execution-role-arn"
+
+  EcsTaskRoleArn:
+    Description: A reference to the ARN of common ECS task role
+    Value: !GetAtt EcsTaskRole.Arn
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-ecs-task-role-arn"
+
+  AlbDnsName:
+    Description: A reference to the DNS name of common ALB
+    Value: !GetAtt Alb.DNSName
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-alb-dns-name"
+
+  WebAppAlbTargetGroupArn:
+    Description: A reference to the ARN of webapp ALB target group
+    Value: !Ref WebAppAlbTargetGroup
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-webapp-alb-tg-arn"

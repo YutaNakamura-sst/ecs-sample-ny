@@ -1,0 +1,9 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - bash -eu ./scripts/install.sh
+  build:
+    commands:
+      - bash -eu scripts/deploy.sh ${ENV_ID}

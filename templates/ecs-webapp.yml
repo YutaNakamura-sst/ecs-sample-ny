@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  AppId:
+    Description: An application ID that is prefixed to resource names
+    Type: String
+
+  EnvId:
+    Description: An environment ID that is prefixed to resource names
+    Type: String
+
+  ImageTag:
+    Description: An image tag that is used in ECS task definition
+    Type: String
+
+  VpcId:
+    Type: String
+
+  SubnetId1:
+    Type: String
+
+  SubnetId2:
+    Type: String
+
+Resources:
+  #----------------------------------------------------------#
+  # ECS Service
+  #----------------------------------------------------------#
+  WebAppEcsService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "${AppId}-${EnvId}-webapp-ecs-service"
+      Cluster: {"Fn::ImportValue": !Sub "${AppId}-${EnvId}-ecs-cluster-id"}
+      LaunchType: FARGATE
+      DesiredCount: 1
+      EnableExecuteCommand: true
+      DeploymentController:
+        Type: ECS
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Sub "${SubnetId1}"
+            - !Sub "${SubnetId2}"
+          SecurityGroups:
+            - {"Fn::ImportValue": !Sub "${AppId}-${EnvId}-webapp-ecs-sg-id"}
+      TaskDefinition: !Ref WebAppEcsTaskDefinition
+      LoadBalancers:
+        - TargetGroupArn: {"Fn::ImportValue": !Sub "${AppId}-${EnvId}-webapp-alb-tg-arn"}
+          ContainerPort: 8080
+          ContainerName: "webapp"
+  #----------------------------------------------------------#
+
+  #----------------------------------------------------------#
+  # ECS Task Definition
+  #----------------------------------------------------------#
+  WebAppEcsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Name: "webapp"
+          Image: !Sub
+            - "${EcrRepositoryUri}:${ImageTag}"
+            - EcrRepositoryUri: {"Fn::ImportValue": !Sub "${AppId}-${EnvId}-webapp-ecr-repository-uri"}
+              ImageTag: !Sub "${ImageTag}"
+          LinuxParameters:
+            InitProcessEnabled: True
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-create-group: True
+              awslogs-group: {"Fn::ImportValue": !Sub "${AppId}-${EnvId}-ecs-log-group-name"}
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: webapp
+      Family: !Sub "${AppId}-${EnvId}-webapp"
+      Cpu: 1024
+      Memory: 2048
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: {"Fn::ImportValue": !Sub "${AppId}-${EnvId}-ecs-task-execution-role-arn"}
+      TaskRoleArn: {"Fn::ImportValue": !Sub "${AppId}-${EnvId}-ecs-task-role-arn"}
+  #----------------------------------------------------------#

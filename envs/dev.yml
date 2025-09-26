@@ -1,0 +1,9 @@
+Parameters:
+ AppId: "ecs-sample-ny"
+ EnvId: "dev"
+ VpcId: "vpc-0a318c0b8ebdcb73f"
+ SubnetId1: "subnet-0d836cf5952a8c50b"
+ subnetId2: "subnet-021c86557bdac4d6d"
+ PublicSubnetId1: "subnet-086a59d1f366ebb4f"
+ PublicSubnetId2: "subnet-0718cbb63f61b8010"
+ LambdaPythonRuntime: Python3.12

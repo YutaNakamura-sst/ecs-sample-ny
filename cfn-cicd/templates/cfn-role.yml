@@ -1,0 +1,48 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  AppId:
+    Description: "Application ID"
+    Type: String
+
+  EnvId:
+    Description: "Environment ID"
+    Type: String
+
+Resources:
+  CloudFormationIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppId}-${EnvId}-cfn-iam-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "cloudformation.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Policies:
+        - PolicyName: S3SamCliManagedBucketAccessPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Resource: "arn:aws:s3:::aws-sam-cli-managed-default-*/*"
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+
+Outputs:
+  CloudFormationIamRoleArn:
+    Description: "CloudFormation Role ARN"
+    Value: !GetAtt CloudFormationIamRole.Arn
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-cfn-iam-role-arn"

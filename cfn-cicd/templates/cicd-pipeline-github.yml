@@ -1,0 +1,203 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  AppId:
+    Description: "Application ID"
+    Type: String
+
+  EnvId:
+    Description: "Environment ID"
+    Type: String
+
+  TargetBranchName:
+    Description: "Target Branch Name of CodeCommit Repository"
+    Type: String
+  
+  FullRepositoryId:
+    Type: String
+
+  CodeStarConnectionName:
+    Type: String
+
+Conditions:
+  IsDevAccount: !Equals [ !Ref EnvId, "dev" ]
+
+Resources:
+  # ---------------------------------------------------------
+  # S3 Bucket for Pipeline Artifacts
+  # ---------------------------------------------------------
+  S3ArtifactStoreBucket:
+    Type: AWS::S3::Bucket
+
+  S3ArtifactStoreBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3ArtifactStoreBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyUnEncryptedObjectUploads
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:PutObject'
+            Resource: !Join 
+              - ''
+              - - !GetAtt S3ArtifactStoreBucket.Arn
+                - /*
+            Condition:
+              StringNotEquals:
+                's3:x-amz-server-side-encryption': 'aws:kms'
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: !Join 
+              - ''
+              - - !GetAtt S3ArtifactStoreBucket.Arn
+                - /*
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+  # ---------------------------------------------------------
+  # CodeBuild
+  # ---------------------------------------------------------
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AppId}-${EnvId}-codebuild-pj"
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: "./buildspec.yml"
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        Type: LINUX_CONTAINER
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: APP_ID
+            Type: PLAINTEXT
+            Value: !Ref AppId
+          - Name: ENV_ID
+            Type: PLAINTEXT
+            Value: !Ref EnvId
+          - Name: AWS_ACCOUNT_ID
+            Type: PLAINTEXT
+            Value: !Ref AWS::AccountId
+          - Name: CFN_ROLE_ARN
+            Type: PLAINTEXT
+            Value: {"Fn::ImportValue": !Sub "${AppId}-${EnvId}-cfn-iam-role-arn"}
+      LogsConfig:
+        CloudWatchLogs:
+          Status: "ENABLED"
+        S3Logs:
+          Status: "DISABLED"
+          EncryptionDisabled: false
+
+
+  # ---------------------------------------------------------
+  # CodePipeline
+  # ---------------------------------------------------------
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${AppId}-${EnvId}-codepipeline"
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref S3ArtifactStoreBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeStarSourceConnection
+              RunOrder: 1
+              Configuration:
+                ConnectionArn: !Sub "arn:aws:codeconnections:${AWS::Region}:${AWS::AccountId}:connection/${CodeStarConnectionName}"
+                FullRepositoryId: !Ref FullRepositoryId
+                BranchName: !Ref TargetBranchName
+                OutputArtifactFormat: CODEBUILD_CLONE_REF
+              Namespace: SourceVariables
+              OutputArtifacts:
+                - Name: SourceArtifact
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              RunOrder: 1
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              Namespace: BuildVariables
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildArtifact
+
+  # ---------------------------------------------------------
+  # IAM Role
+  # ---------------------------------------------------------
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppId}-${EnvId}-codebuild-svc-role"
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppId}-${EnvId}-codepipeline-svc-role"
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeCommitFullAccess
+        - arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess
+        - arn:aws:iam::aws:policy/AWSCodeDeployDeployerAccess
+        - arn:aws:iam::aws:policy/AmazonSNSFullAccess
+      Policies:
+        - PolicyName: S3ArtifactStoreBucketAccessPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Resource: !Sub "${S3ArtifactStoreBucket.Arn}/*"
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+        - PolicyName: CodeStarConnectionAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: "*"

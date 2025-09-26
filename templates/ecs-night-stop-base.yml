@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+# -------------------------------------------------------------
+#  パラメータ定義
+#   - codebuild\envs\dev.yml参照
+#    - AppId:アプリケーションID
+#    - EnvId:環境
+# -------------------------------------------------------------
+Parameters:
+  AppId:
+    Description: An application ID that is prefixed to resource names
+    Type: String
+
+  EnvId:
+    Description: An environment ID that is prefixed to resource names
+    Type: String
+
+  LambdaPythonRuntime:
+    Description: LambdaPythonRuntime
+    Type: String
+
+# -------------------------------------------------------------
+#  リソース定義
+# -------------------------------------------------------------
+Resources:
+  # ---------------------------------------------------------
+  # Lambda
+  # ---------------------------------------------------------
+  EcsStartFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        !Join
+          - '-'
+          - - 'lmd'
+            - !Sub '${AppId}'
+            - !Sub '${EnvId}'
+            - 'ecs-start'
+      Runtime: !Sub "${LambdaPythonRuntime}"
+      # Runtime: python3.10
+      Handler: lambda_function.lambda_handler
+      CodeUri: ../functions/EcsStartFunction
+      Timeout: 60
+      Policies:
+        - AmazonECS_FullAccess
+  EcsStartFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${EcsStartFunction}
+
+  EcsStopFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        !Join
+          - '-'
+          - - 'lmd'
+            - !Sub '${AppId}'
+            - !Sub '${EnvId}'
+            - 'ecs-stop'
+      Runtime: !Sub "${LambdaPythonRuntime}"
+      # Runtime: python3.10
+      Handler: lambda_function.lambda_handler
+      CodeUri: ../functions/EcsStopFunction
+      Timeout: 60
+      Policies:
+        - AmazonECS_FullAccess
+  EcsStopFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${EcsStopFunction}
+
+  # ---------------------------------------------------------
+  # IAM Role
+  # ---------------------------------------------------------
+  EcsStartStopFunctionScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        !Join
+          - '-'
+          - - 'role'
+            - !Sub '${AppId}'
+            - !Sub '${EnvId}'
+            - 'ecs-start-stop'
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - scheduler.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+        - PolicyName:
+            !Join
+              - '-'
+              - - 'policy'
+                - !Sub '${AppId}'
+                - !Sub '${EnvId}'
+                - 'ecs-start-stop'
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt EcsStartFunction.Arn
+                  - !GetAtt EcsStopFunction.Arn
+
+# -------------------------------------------------------------
+#  出力定義
+# -------------------------------------------------------------
+Outputs:
+  EcsStartFunctionArn:
+    Description: EcsStartFunctionArn
+    Value: !GetAtt EcsStartFunction.Arn
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-ecs-start-arn"
+
+  EcsStopFunctionArn:
+    Description: EcsStopFunctionArn
+    Value: !GetAtt EcsStopFunction.Arn
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-ecs-stop-arn"
+
+  EcsStartStopFunctionScheduleRoleArn:
+    Description: EcsStartStopFunctionScheduleRoleArn
+    Value: !GetAtt EcsStartStopFunctionScheduleRole.Arn
+    Export:
+      Name: !Sub "${AppId}-${EnvId}-ecs-start-stop-role-arn"
